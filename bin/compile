@@ -72,6 +72,15 @@ then
         done
     fi
 fi
+if [[ -f "$env_dir/AWS_ACCESS_KEY" ]]
+  then
+    export "$key=$(cat "$env_dir/AWS_ACCESS_KEY")"
+fi
+
+if [[ -f "$env_dir/AWS_SECRET_KEY" ]]
+  then
+    export "$key=$(cat "$env_dir/AWS_SECRET_KEY")"
+fi
 
 # By default, there's an expectation that the project's build.boot
 # file defines 'build' task that takes care of all sorts of build-time

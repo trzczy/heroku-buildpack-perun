@@ -74,12 +74,12 @@ then
 fi
 if [[ -f "$env_dir/AWS_ACCESS_KEY" ]]
   then
-    export "$key=$(cat "$env_dir/AWS_ACCESS_KEY")"
+    export "AWS_ACCESS_KEY=$(cat "$env_dir/AWS_ACCESS_KEY")"
 fi
 
 if [[ -f "$env_dir/AWS_SECRET_KEY" ]]
   then
-    export "$key=$(cat "$env_dir/AWS_SECRET_KEY")"
+    export "AWS_SECRET_KEY=$(cat "$env_dir/AWS_SECRET_KEY")"
 fi
 
 # By default, there's an expectation that the project's build.boot

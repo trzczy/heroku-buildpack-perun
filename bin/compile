@@ -90,7 +90,7 @@ fi
 # pipeline. For instance:
 # BOOTBUILD_CMD="boot foo -x -- bar --blah -q -- qaz"
 
-boot_cmd=${BOOTBUILD_CMD:-"boot build"}
+boot_cmd=${BOOTBUILD_CMD:-"boot build; boot deploy"}
 echo "-----> Running: $boot_cmd"
 export PATH="$build/.bootbin:$PATH"
 (cd $build && $boot_cmd 2>&1 | indent)

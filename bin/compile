@@ -26,20 +26,74 @@ build=$(cd "$1/" && pwd)
 cache=$(cd "$2/" && pwd)
 env_dir="$3"
 
-export BOOT_LOCAL_REPO="$cache/.m2/repository"
-export BOOT_JVM_OPTIONS="-Xmx384m -Xss512k"
+# Load common JVM functionality from https://github.com/heroku/heroku-buildpack-jvm-common
+JVM_COMMON_BUILDPACK="https://codon-buildpacks.s3.amazonaws.com/buildpacks/heroku/jvm-common.tgz"
+mkdir -p /tmp/jvm-common
+curl --silent --location $JVM_COMMON_BUILDPACK | tar xzm -C /tmp/jvm-common --strip-components=1
+. /tmp/jvm-common/bin/util
+. /tmp/jvm-common/bin/java
 
-if [[ -f "$cache/boot" ]]
+# Install JDK
+javaVersion=$(detect_java_version ${build})
+echo -n "-----> Installing OpenJDK ${javaVersion}..."
+install_java ${build} ${javaVersion}
+jdk_overlay ${build}
+echo "done"
+
+if [[ -d "$env_dir" ]]; then
+    # load the buildpack config vars
+    for key in BOOT_SH_VERSION BOOT_VERSION BOOTBUILD_CMD BOOTBUILD_CONFIG_WHITELIST; do
+        if [[ -f "$env_dir/$key" ]]; then
+            export "$key=$(cat "$env_dir/$key")"
+        fi
+    done
+fi
+
+if [[ -d "$env_dir" ]]; then
+  # load the config vars allowed by BOOTBUILD_CONFIG_WHITELIST
+  # (inspired by the way Clojure buildpack does it)
+  if [[ -n "$BOOTBUILD_CONFIG_WHITELIST" ]]; then
+    for key in $BOOTBUILD_CONFIG_WHITELIST; do
+      if [[ -f "$env_dir/$key" ]]; then
+        export "$key=$(cat "$env_dir/$key")"
+      fi
+    done
+  fi
+fi
+
+if [[ -f "$env_dir/AWS_ACCESS_KEY" ]]
 then
+    export "AWS_ACCESS_KEY=$(cat "$env_dir/AWS_ACCESS_KEY")"
+fi
+
+if [[ -f "$env_dir/AWS_SECRET_KEY" ]]
+then
+    export "AWS_SECRET_KEY=$(cat "$env_dir/AWS_SECRET_KEY")"
+fi
+
+cached_m2_dir="$cache/.m2"
+cached_boot_home_dir="$cache/.boot"
+
+export BOOT_HOME="$cached_boot_home_dir"
+export BOOT_LOCAL_REPO="$cached_m2_dir/repository"
+export BOOT_JVM_OPTIONS="-Xmx768m -Xss512k"
+export BOOT_SH_VERSION=${BOOT_SH_VERSION:-2.5.2}
+export BOOT_VERSION=${BOOT_VERSION:-2.6.0}
+
+if [[ -f "$cache/boot" ]]; then
     echo "-----> Using cached version of boot"
+    if [[ -f "$cached_boot_home_dir/boot.properties" ]]; then
+      cat "$cached_boot_home_dir/boot.properties" | indent
+    fi
 else
-    echo -n "-----> Downloading boot..."
-    curl -sLo "$cache/boot.sh" https://github.com/boot-clj/boot/releases/download/2.0.0/boot.sh
+    boot_sh_url="https://github.com/boot-clj/boot-bin/releases/download/$BOOT_SH_VERSION/boot.sh"
+    echo "-----> Downloading $boot_sh_url ..."
+    curl --show-error -sLo "$cache/boot.sh" $boot_sh_url
     chmod +x "$cache/boot.sh"
-    echo " done"
+    echo "boot.sh is ready" | indent
     echo "-----> Bootstrapping..."
-    "$cache/boot.sh" -C help 2>&1 | grep Retrieving | indent
-    "$cache/boot.sh" -C -V 2>&1 | indent
+    "$cache/boot.sh" -C help 2>&1 | grep -E 'Retrieving|Downloading' | indent
+    cat "$cached_boot_home_dir/boot.properties" | indent
     mv "$cache/boot.sh" "$cache/boot"
     echo "-----> Done bootstrapping"
 fi
@@ -49,38 +103,6 @@ mkdir -p "$build/.bootbin"
 cp "$cache/boot" "$build/.bootbin/"
 echo " done"
 
-if [[ -d "$env_dir" ]]
-then
-    # load the buildpack config vars
-    for key in BOOTBUILD_CMD BOOTBUILD_CONFIG_WHITELIST
-    do
-        if [[ -f "$env_dir/$key" ]]
-        then
-            export "$key=$(cat "$env_dir/$key")"
-        fi
-    done
-    # load the config vars allowed by BOOTBUILD_CONFIG_WHITELIST
-    # (inspired by the way Clojure buildpack does it)
-    if [[ -n "$BOOTBUILD_CONFIG_WHITELIST" ]]
-    then
-        for key in $BOOTBUILD_CONFIG_WHITELIST
-        do
-            if [[ -f "$env_dir/$key" ]]
-            then
-                export "$key=$(cat "$env_dir/$key")"
-            fi
-        done
-    fi
-fi
-if [[ -f "$env_dir/AWS_ACCESS_KEY" ]]
-  then
-    export "AWS_ACCESS_KEY=$(cat "$env_dir/AWS_ACCESS_KEY")"
-fi
-
-if [[ -f "$env_dir/AWS_SECRET_KEY" ]]
-  then
-    export "AWS_SECRET_KEY=$(cat "$env_dir/AWS_SECRET_KEY")"
-fi
 
 # By default, there's an expectation that the project's build.boot
 # file defines 'build' task that takes care of all sorts of build-time
@@ -90,34 +112,27 @@ fi
 # pipeline. For instance:
 # BOOTBUILD_CMD="boot foo -x -- bar --blah -q -- qaz"
 
-boot_cmd=${BOOTBUILD_CMD:-"boot build"}
+boot_cmd=${BOOTBUILD_CMD:-"boot deploy"}
 echo "-----> Running: $boot_cmd"
-export PATH="$build/.bootbin:$PATH"
-(cd $build && $boot_cmd 2>&1 | indent)
+(
+  export PATH="$build/.bootbin:$PATH"
+  cd $build
+  $boot_cmd 2>&1 | indent
+  echo ""
+)
 
-echo -n "-----> Copying jars..."
-cp -R "$cache/.m2" "$build/.m2"
+# At this point, "boot build" or BOOT_BUILD_CMD are done with downloading
+# boot-related and project-relared Maven artifacts from Internet, making
+# it the right moment to copy all of them to the build directory.
+
+echo -n "-----> Copying boot artifacts..."
+rm -rf "$cached_boot_home_dir/cache/cache" "$cached_boot_home_dir/cache/tmp"
+cp -R "$cached_m2_dir" "$build/.m2"
+cp -R "$cached_boot_home_dir" "$build/.boot"
 echo " done"
 
 mkdir -p "$build/.profile.d"
 cat << EOF > "$build/.profile.d/boot-env.sh"
 export PATH="\$HOME/.bootbin:\$PATH"
-
-limit=\$(ulimit -u)
-case \$limit in
-256)   # 1X Dyno
-  default_java_opts="-Xmx384m -Xss512k"
-  ;;
-512)   # 2X Dyno
-  default_java_opts="-Xmx768m"
-  ;;
-32768) # PX Dyno
-  default_java_opts="-Xmx4g"
-  ;;
-*)
-  default_java_opts="-Xmx384m -Xss512k"
-  ;;
-esac
-
-export BOOT_JVM_OPTIONS=\${BOOT_JVM_OPTIONS:-"\${default_java_opts} -Dfile.encoding=UTF-8"}
+export BOOT_VERSION=$BOOT_VERSION
 EOF

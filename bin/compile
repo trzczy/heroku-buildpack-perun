@@ -114,14 +114,14 @@ echo " done"
 
 boot_cmd=${BOOTBUILD_CMD:-"boot deploy"}
 echo "-----> Running: $boot_cmd"
-(
+#(
   export PATH="$build/.bootbin:$PATH"
   cd $build
   $boot_cmd
   echo "adam end"
   echo $build
   echo ".... ... .. ."
-)
+#)
 
 # At this point, "boot build" or BOOT_BUILD_CMD are done with downloading
 # boot-related and project-relared Maven artifacts from Internet, making
